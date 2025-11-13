@@ -1,0 +1,172 @@
+# Copyright (C) 2025 Xiaomi Corporation
+# This software may be used and distributed according to the terms of the Xiaomi Miloco License Agreement.
+
+"""
+Authentication middleware
+Provides JWT token creation, verification and management functionality
+"""
+import logging
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
+import jwt
+from fastapi import Request, Response, HTTPException, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.websockets import WebSocket
+
+from miloco_server.config import JWT_CONFIG
+from miloco_server.middleware.exceptions import AuthenticationException
+
+logger = logging.getLogger(__name__)
+
+# Global token invalidation timestamp
+token_invalidation_time = int(time.time())
+logger.info("Authentication middleware initialized - All old JWT tokens invalidated, "
+            "invalidation timestamp: %s", token_invalidation_time)
+
+ADMIN_USERNAME = "admin"
+
+def invalidate_all_tokens():
+    """
+    Invalidate all JWT tokens
+    Implemented by setting global invalidation timestamp
+    """
+    global token_invalidation_time
+    current_time = int(time.time())
+    token_invalidation_time = current_time
+    logger.info("All JWT tokens invalidated, invalidation timestamp: %s", current_time)
+
+def is_token_valid(token_issued_at: int) -> bool:
+    """
+    Check if JWT token is valid
+
+    Args:
+        token_issued_at: JWT token issued timestamp (iat field)
+
+    Returns:
+        bool: True if token is valid, False if token is invalidated
+    """
+    # If token issued time is earlier than global invalidation time, token is invalid
+    is_valid = token_issued_at > token_invalidation_time
+
+    if not is_valid:
+        logger.info("Token invalidated - issued at: %s, invalidation time: %s",
+                    token_issued_at, token_invalidation_time)
+
+    return is_valid
+
+def create_access_token(username: str) -> str:
+    """Create JWT access token"""
+    expire = datetime.utcnow() + timedelta(minutes=JWT_CONFIG["access_token_expire_minutes"])
+    to_encode = {
+        "sub": username,
+        "exp": expire,
+        "iat": int(time.time()),
+    }
+    encoded_jwt = jwt.encode(to_encode, JWT_CONFIG["secret_key"], algorithm=JWT_CONFIG["algorithm"])
+    return encoded_jwt
+
+def _verify_jwt_token_internal(token: Optional[str]) -> str:
+    """
+    Internal JWT verification logic, raises AuthenticationException
+
+    Args:
+        token: JWT token string, can be None
+
+    Returns:
+        str: Username
+
+    Raises:
+        AuthenticationException: Raised when authentication fails
+    """
+    if not token:
+        raise AuthenticationException("Authentication token not found, please login first")
+
+    try:
+        payload = jwt.decode(token, JWT_CONFIG["secret_key"], algorithms=[JWT_CONFIG["algorithm"]])
+        username: str = payload.get("sub")
+        # Get token issued time
+        token_issued_at: int = payload.get("iat")
+
+        if username is None or username != ADMIN_USERNAME:
+            raise AuthenticationException("Invalid authentication token")
+
+        # Check if token has been invalidated
+        if not is_token_valid(token_issued_at):
+            raise AuthenticationException("Authentication token has been invalidated, please login again")
+
+        return username
+    except jwt.ExpiredSignatureError as exc:
+        raise AuthenticationException("Authentication token has expired, please login again") from exc
+    except jwt.PyJWTError as exc:
+        raise AuthenticationException("Invalid authentication token") from exc
+
+def verify_jwt_token(token: Optional[str]) -> str:
+    """
+    Verify JWT token and return username (general verification function)
+
+    Args:
+        token: JWT token string, can be None
+
+    Returns:
+        str: Username
+
+    Raises:
+        HTTPException: Raised when authentication fails
+    """
+    try:
+        # Internal verification logic, raises AuthenticationException
+        return _verify_jwt_token_internal(token)
+    except AuthenticationException as exc:
+        # Catch AuthenticationException and convert to HTTPException
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=exc.message
+        ) from exc
+
+def verify_token(request: Request) -> str:
+    """Verify JWT token and return username (from Cookie)"""
+    # Get token from Cookie
+    token = request.cookies.get("access_token")
+    return verify_jwt_token(token)
+
+def verify_websocket_token(websocket: WebSocket) -> str:
+    """Verify JWT token for WebSocket connection"""
+    # Get token from query parameters
+    token = websocket.cookies.get("access_token")
+    return verify_jwt_token(token)
+
+def set_auth_cookie(response: Response, access_token: str) -> None:
+    """
+    Set authentication cookie
+
+    Args:
+        response: FastAPI Response object
+        access_token: JWT access token
+    """
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        max_age=JWT_CONFIG["access_token_expire_minutes"] * 60,  # Convert to seconds
+        httponly=True,  # Prevent XSS attacks
+        secure=False,   # Set to False for development, True for production
+        samesite="lax"  # CSRF protection
+    )
+
+def clear_auth_cookie(response: Response) -> None:
+    """
+    Clear authentication cookie
+
+    Args:
+        response: FastAPI Response object
+    """
+    response.delete_cookie(key="access_token")
+
+
+class AuthStaticFiles(StaticFiles):
+    """StaticFiles with authentication middleware"""
+    async def __call__(self, scope, receive, send):
+        request = Request(scope, receive=receive)
+        verify_token(request)
+        await super().__call__(scope, receive, send)

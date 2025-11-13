@@ -1,0 +1,69 @@
+/**
+ * Copyright (C) 2025 Xiaomi Corporation
+ * This software may be used and distributed according to the terms of the Xiaomi Miloco License Agreement.
+ */
+ 
+.wrap {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: var(--spacing-lg);
+}
+
+.content {
+  width: 915px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.headerContainer {
+  flex-shrink: 0;
+}
+
+.deviceListContainer {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.errorContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.errorText {
+  font-size: 14px;
+  color: #cf1322;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.retryButton {
+  background: #ff4d4f;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background: #ff7875;
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
